@@ -24,7 +24,30 @@ fn main() {
 #[component]
 fn App() -> Element {
     rsx! {
-        // Tailwind is automatically handled by Dioxus 0.7 if tailwind.css exists
+        // Tailwind CDN as a reliable fallback
+        script { src: "https://unpkg.com/@tailwindcss/browser@4" }
+        // Link to local compiled tailwind using the asset! macro for Dioxus 0.7
+        link { rel: "stylesheet", href: asset!("/assets/tailwind.css") }
+        
+        // Basic fallback styles to ensure layout works even without Tailwind
+        style {
+            r#"
+            body, html {{ margin: 0; padding: 0; height: 100%; }}
+            .flex {{ display: flex; }}
+            .flex-col {{ flex-direction: column; }}
+            .flex-1 {{ flex: 1 1 0%; }}
+            .h-screen {{ height: 100vh; }}
+            .w-64 {{ width: 16rem; }}
+            .bg-white {{ background-color: #ffffff; }}
+            .bg-gray-100 {{ background-color: #f3f4f6; }}
+            .border-r {{ border-right: 1px solid #e5e7eb; }}
+            .p-6 {{ padding: 1.5rem; }}
+            .p-4 {{ padding: 1rem; }}
+            .p-8 {{ padding: 2rem; }}
+            .font-bold {{ font-weight: 700; }}
+            .text-xl {{ font-size: 1.25rem; }}
+            "#
+        }
         McpHost {}
     }
 }
@@ -75,15 +98,21 @@ fn McpHost() -> Element {
     use_effect(move || {
         let manager = app_state.connection_manager.read().clone();
         spawn(async move {
-            // Connect to embedded server
+            // Try connecting via stdio first
             match manager.connect_stdio("cargo", vec!["run", "--bin", "mcp-server"].into_iter().map(String::from).collect()).await {
                 Ok(conn_id) => {
                     conn_signal.set(Some(conn_id));
                 }
                 Err(e) => {
-                    err_signal.set(Some(format!("Failed to connect: {}", e)));
-                    // Fall back to embedded server directly
-                    log::warn!("Failed to connect via stdio, using embedded server directly");
+                    log::warn!("Failed to connect via stdio: {}. Falling back to direct embedded connection.", e);
+                    match manager.connect_embedded().await {
+                        Ok(conn_id) => {
+                            conn_signal.set(Some(conn_id));
+                        }
+                        Err(e) => {
+                            err_signal.set(Some(format!("Failed to connect to embedded server: {}", e)));
+                        }
+                    }
                 }
             }
         });
@@ -301,7 +330,7 @@ fn MainContent() -> Element {
     let is_overlay = matches!(display_mode.read().clone(), DisplayMode::Fullscreen | DisplayMode::Pip);
     
     rsx! {
-        div { class: "flex-1 flex flex-col overflow-hidden relative",
+        div { class: "flex-1 flex flex-col overflow-hidden relative bg-white",
             // Content Area
             div { class: "flex-1 overflow-y-auto p-8 {display_class}",
                 // Close button for expanded/fullscreen modes

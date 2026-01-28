@@ -61,6 +61,9 @@ impl UiNode {
 pub fn create_rhai_engine() -> Engine {
     let mut engine = Engine::new();
 
+    // Increase limits for complex UI structures
+    engine.set_max_expr_depths(0, 0); // Disable depth limits
+    
     engine.register_fn("el", |tag: &str, props: Map, children: Array| -> Map {
         let mut map = Map::new();
         map.insert("tag".into(), tag.into());

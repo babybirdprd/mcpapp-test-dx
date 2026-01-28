@@ -21,6 +21,9 @@ pub trait McpTransport: Send + Sync {
     /// Receive next message
     async fn receive_message(&mut self) -> Result<Option<Value>, TransportError>;
     
+    /// Send raw JSON value
+    async fn send_raw(&mut self, value: Value) -> Result<(), TransportError>;
+
     /// Close the transport
     async fn close(&mut self) -> Result<(), TransportError>;
     
@@ -171,6 +174,17 @@ impl McpTransport for StdioTransport {
         
         self.write_line(&json).await
     }
+
+    async fn send_raw(&mut self, value: Value) -> Result<(), TransportError> {
+        if !self.connected {
+            return Err(TransportError::Disconnected);
+        }
+        
+        let json = serde_json::to_string(&value)
+            .map_err(|e| TransportError::Json(e.to_string()))?;
+        
+        self.write_line(&json).await
+    }
     
     async fn receive_message(&mut self) -> Result<Option<Value>, TransportError> {
         if !self.connected {
@@ -278,14 +292,22 @@ impl McpTransport for MemoryTransport {
             return Ok(None);
         }
         
-        match self.incoming.try_recv() {
-            Ok(msg) => Ok(Some(msg)),
-            Err(mpsc::error::TryRecvError::Empty) => Ok(None),
-            Err(mpsc::error::TryRecvError::Disconnected) => {
+        match self.incoming.recv().await {
+            Some(msg) => Ok(Some(msg)),
+            None => {
                 self.connected = false;
                 Ok(None)
             }
         }
+    }
+
+    async fn send_raw(&mut self, value: Value) -> Result<(), TransportError> {
+        if !self.connected {
+            return Err(TransportError::Disconnected);
+        }
+        
+        self.outgoing.send(value)
+            .map_err(|_| TransportError::Disconnected)
     }
     
     async fn close(&mut self) -> Result<(), TransportError> {

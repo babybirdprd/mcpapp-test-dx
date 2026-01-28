@@ -77,13 +77,25 @@ impl ConnectionManager {
         let host_caps = self.host_state.to_capabilities();
         connection.negotiate_capabilities(&host_caps, None);
         
-        // Log negotiated capabilities
-        if let Some(negotiated) = connection.get_negotiated_capabilities() {
-            log::info!("Negotiated capabilities for {}:", connection_id);
-            log::info!("  - UI Apps supported: {}", negotiated.supports_ui_apps);
-            log::info!("  - Display modes: {:?}", negotiated.display_modes);
-            log::info!("  - Tool notifications: {}", negotiated.tool_notifications);
-            log::info!("  - Resource notifications: {}", negotiated.resource_notifications);
+        // Fetch tools and resources BEFORE moving transport to background task
+        let tools_request = JsonRpcRequest::new("tools/list", None);
+        let tools_response = transport.send_request(tools_request).await
+            .map_err(|e| ConnectionError::Transport(e.to_string()))?;
+        
+        if let Some(tools_result) = tools_response.result {
+            if let Ok(list_tools) = serde_json::from_value::<ListToolsResult>(tools_result) {
+                connection.update_tools(list_tools.tools).await;
+            }
+        }
+
+        let resources_request = JsonRpcRequest::new("resources/list", None);
+        let resources_response = transport.send_request(resources_request).await
+            .map_err(|e| ConnectionError::Transport(e.to_string()))?;
+
+        if let Some(resources_result) = resources_response.result {
+            if let Ok(list_resources) = serde_json::from_value::<ListResourcesResult>(resources_result) {
+                connection.update_resources(list_resources.resources).await;
+            }
         }
         
         connection.set_state(ConnectionState::Ready);
@@ -102,15 +114,99 @@ impl ConnectionManager {
         // Start background task for this connection
         self.start_connection_task(connection_id.clone(), transport);
         
-        // Fetch tools and resources
-        self.fetch_tools(&connection_id).await?;
-        self.fetch_resources(&connection_id).await?;
-        
         log::info!("Connected to MCP server: {} (supports UI: {})", 
             connection_id, 
             connection.supports_ui_extension
         );
         
+        Ok(connection_id)
+    }
+
+    /// Connect to the embedded server directly using MemoryTransport
+    pub async fn connect_embedded(&self) -> Result<String, ConnectionError> {
+        let connection_id = "embedded".to_string();
+        log::info!("Connecting to embedded MCP server");
+
+        let (mut client_transport, mut server_transport) = crate::host::transport::MemoryTransport::create_pair();
+        
+        // Create server
+        let server = crate::server::EmbeddedServer::new();
+        
+        // Start server task
+        tokio::spawn(async move {
+            loop {
+                match server_transport.receive_message().await {
+                    Ok(Some(request)) => {
+                        let id = request.get("id").cloned();
+                        let method = request.get("method").and_then(|v| v.as_str()).unwrap_or("");
+                        let params = request.get("params").cloned().unwrap_or(json!({}));
+
+                        let response = match method {
+                            "initialize" => {
+                                match server.handle_initialize(params).await {
+                                    Ok(res) => json!({ "jsonrpc": "2.0", "id": id, "result": res }),
+                                    Err(e) => json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32603, "message": e } })
+                                }
+                            }
+                            "tools/list" => {
+                                match server.list_tools().await {
+                                    Ok(res) => json!({ "jsonrpc": "2.0", "id": id, "result": res }),
+                                    Err(e) => json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32603, "message": e } })
+                                }
+                            }
+                            "resources/list" => {
+                                match server.list_resources().await {
+                                    Ok(res) => json!({ "jsonrpc": "2.0", "id": id, "result": res }),
+                                    Err(e) => json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32603, "message": e } })
+                                }
+                            }
+                            "notifications/initialized" => continue,
+                            _ => json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32601, "message": "Method not found" } })
+                        };
+                        let _ = server_transport.send_raw(response).await;
+                    }
+                    Ok(None) => break,
+                    Err(_) => break,
+                }
+            }
+        });
+
+        // Create connection
+        let mut connection = McpServerConnection::new(&connection_id);
+        connection.set_state(ConnectionState::Initializing);
+
+        // Handshake
+        let init_request = self.build_initialize_request();
+        let init_response = client_transport.send_request(init_request).await
+            .map_err(|e| ConnectionError::Transport(e.to_string()))?;
+        
+        connection.set_capabilities(&init_response.result.unwrap());
+        connection.negotiate_capabilities(&self.host_state.to_capabilities(), None);
+
+        // Fetch tools
+        let tools_response = client_transport.send_request(JsonRpcRequest::new("tools/list", None)).await
+            .map_err(|e| ConnectionError::Transport(e.to_string()))?;
+        if let Some(tools_result) = tools_response.result {
+            let list_tools: ListToolsResult = serde_json::from_value(tools_result).unwrap();
+            connection.update_tools(list_tools.tools).await;
+        }
+
+        // Fetch resources
+        let resources_response = client_transport.send_request(JsonRpcRequest::new("resources/list", None)).await
+            .map_err(|e| ConnectionError::Transport(e.to_string()))?;
+        if let Some(resources_result) = resources_response.result {
+            let list_resources: ListResourcesResult = serde_json::from_value(resources_result).unwrap();
+            connection.update_resources(list_resources.resources).await;
+        }
+
+        connection.set_state(ConnectionState::Ready);
+        let _ = client_transport.send_notification(JsonRpcNotification::new("notifications/initialized", None)).await;
+
+        {
+            let mut connections = self.connections.write().await;
+            connections.insert(connection_id.clone(), connection);
+        }
+
         Ok(connection_id)
     }
     
@@ -191,19 +287,6 @@ impl ConnectionManager {
         });
     }
     
-    /// Fetch tools from a connection
-    async fn fetch_tools(&self, connection_id: &str) -> Result<(), ConnectionError> {
-        // For now, use the tools we got at initialization
-        // In a full implementation, we'd make a tools/list request
-        Ok(())
-    }
-    
-    /// Fetch resources from a connection
-    async fn fetch_resources(&self, connection_id: &str) -> Result<(), ConnectionError> {
-        // For now, assume resources are fetched separately
-        Ok(())
-    }
-    
     /// Get a connection by ID
     pub async fn get_connection(&self, id: &str) -> Option<McpServerConnection> {
         self.connections.read().await.get(id).cloned()
@@ -273,10 +356,16 @@ impl ConnectionManager {
             return Err(ConnectionError::NotReady(connection_id.to_string()));
         }
         
-        // For now, return a mock result
-        // In a full implementation, we'd send a tools/call request
         log::info!("Calling tool {} on connection {}", tool_name, connection_id);
+
+        if connection_id == "embedded" {
+            let server = crate::server::EmbeddedServer::new();
+            return server.call_tool(tool_name, arguments).await
+                .map_err(|e| ConnectionError::ToolNotFound(e));
+        }
         
+        // For external connections, in a full implementation we'd send a request.
+        // For this barebones demo, we'll return a basic result.
         Ok(CallToolResult {
             content: vec![Content::text(format!("Tool {} called with {:?}", tool_name, arguments))],
             is_error: None,
@@ -301,9 +390,30 @@ impl ConnectionManager {
         // Check if resource exists
         let resource = connection.find_ui_resource(uri).await
             .ok_or_else(|| ConnectionError::ResourceNotFound(uri.to_string()))?;
+
+        if connection_id == "embedded" {
+            let server = crate::server::EmbeddedServer::new();
+            match server.read_resource(uri).await {
+                Ok(res) => {
+                    if let Some(content) = res.contents.into_iter().next() {
+                        let val = serde_json::to_value(&content).unwrap_or_default();
+                        let text = val.get("text").and_then(|v| v.as_str()).map(|s| s.to_string());
+                        let blob = val.get("blob").and_then(|v| v.as_str()).map(|s| s.to_string());
+                        
+                        return Ok(UiResourceContent {
+                            uri: uri.to_string(),
+                            mime_type: resource.mime_type.clone(),
+                            text,
+                            blob,
+                            _meta: resource._meta.clone(),
+                        });
+                    }
+                }
+                Err(e) => return Err(ConnectionError::ResourceNotFound(e)),
+            }
+        }
         
-        // For now, return mock content based on URI
-        // In a full implementation, we'd send a resources/read request
+        // Fallback for external connections (mock UI)
         let html = self.generate_mock_ui(&resource);
         
         Ok(UiResourceContent {

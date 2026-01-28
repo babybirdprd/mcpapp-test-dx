@@ -277,38 +277,47 @@ impl EmbeddedServer {
                 // Return a Rhai script for native rendering
                 // In production, this would be HTML with proper MCP Apps lifecycle
                 let script = r#"
-                    el("div", #{ "class": "bg-gradient-to-br from-blue-400 to-blue-600 p-6 rounded-xl shadow-2xl text-white max-w-sm mx-auto transform transition-all hover:scale-105" }, [
+                    let content = if data.structured_content != () { data.structured_content } else { #{} };
+                    let location = if "location" in content { content.location } else { "Loading..." };
+                    let temp = if "temp" in content { content.temp.to_string() + "°" } else { "--°" };
+                    let conditions = if "conditions" in content { content.conditions } else { "Please wait" };
+                    let humidity = if "humidity" in content { content.humidity.to_string() + "%" } else { "--%" };
+                    let wind = if "wind_speed" in content { content.wind_speed.to_string() + " km/h" } else { "-- km/h" };
+                    let forecast_data = if "forecast" in content { content.forecast } else { [] };
+
+                    let forecast_items = [];
+                    for day in forecast_data {
+                        forecast_items.push(el("div", #{ "class": "flex justify-between items-center bg-white/10 rounded px-3 py-2" }, [
+                            el("span", #{ "class": "text-sm" }, [ text(day.day) ]),
+                            el("span", #{ "class": "text-sm font-medium" }, [ text(day.high.to_string() + "° / " + day.low.to_string() + "°") ]),
+                            el("span", #{ "class": "text-xs" }, [ text(day.conditions) ])
+                        ]));
+                    }
+
+                    return el("div", #{ "class": "bg-gradient-to-br from-blue-400 to-blue-600 p-6 rounded-xl shadow-2xl text-white max-w-sm mx-auto transform transition-all hover:scale-105" }, [
                         el("div", #{ "class": "flex justify-between items-center mb-4" }, [
-                            el("h2", #{ "class": "text-2xl font-bold" }, [ text(data.structured_content.location) ]),
+                            el("h2", #{ "class": "text-2xl font-bold" }, [ text(location) ]),
                             el("span", #{ "class": "bg-white/20 px-3 py-1 rounded-full text-sm" }, [ text("Now") ])
                         ]),
                         el("div", #{ "class": "flex flex-col items-center my-6" }, [
-                             el("span", #{ "class": "text-6xl font-bold mb-2" }, [ text(data.structured_content.temp.to_string() + "°") ]),
-                             el("span", #{ "class": "text-xl font-medium tracking-wide" }, [ text(data.structured_content.conditions) ])
+                             el("span", #{ "class": "text-6xl font-bold mb-2" }, [ text(temp) ]),
+                             el("span", #{ "class": "text-xl font-medium tracking-wide" }, [ text(conditions) ])
                         ]),
                         el("div", #{ "class": "flex justify-between mt-6 text-blue-100" }, [
                             el("div", #{ "class": "flex flex-col items-center" }, [
                                 el("span", #{ "class": "text-xs uppercase" }, [ text("Humidity") ]),
-                                el("span", #{ "class": "font-bold" }, [ text(data.structured_content.humidity.to_string() + "%") ])
+                                el("span", #{ "class": "font-bold" }, [ text(humidity) ])
                             ]),
                             el("div", #{ "class": "flex flex-col items-center" }, [
                                 el("span", #{ "class": "text-xs uppercase" }, [ text("Wind") ]),
-                                el("span", #{ "class": "font-bold" }, [ text(data.structured_content.wind_speed.to_string() + " km/h") ])
+                                el("span", #{ "class": "font-bold" }, [ text(wind) ])
                             ])
                         ]),
                         el("div", #{ "class": "mt-6 pt-4 border-t border-white/20" }, [
                             el("h3", #{ "class": "text-sm font-semibold mb-3" }, [ text("3-Day Forecast") ]),
-                            el("div", #{ "class": "space-y-2" }, [
-                                data.structured_content.forecast.map(|day| {
-                                    el("div", #{ "class": "flex justify-between items-center bg-white/10 rounded px-3 py-2" }, [
-                                        el("span", #{ "class": "text-sm" }, [ text(day.day) ]),
-                                        el("span", #{ "class": "text-sm font-medium" }, [ text(day.high.to_string() + "° / " + day.low.to_string() + "°") ]),
-                                        el("span", #{ "class": "text-xs" }, [ text(day.conditions) ])
-                                    ])
-                                })
-                            ])
+                            el("div", #{ "class": "space-y-2" }, forecast_items)
                         ])
-                    ])
+                    ]);
                 "#;
 
                 Ok(ReadResourceResult {
@@ -319,43 +328,52 @@ impl EmbeddedServer {
             }
             "ui://portfolio-server/gallery" => {
                 let script = r#"
-                    el("div", #{ "class": "p-8 bg-gray-50 min-h-screen font-sans" }, [
+                    let content = if data.structured_content != () { data.structured_content } else { #{} };
+                    let owner = if "owner" in content { content.owner } else { "Portfolio" };
+                    let bio = if "bio" in content { content.bio } else { "" };
+                    let skills_data = if "skills" in content { content.skills } else { [] };
+                    let projects_data = if "projects" in content { content.projects } else { [] };
+
+                    let skill_chips = [];
+                    for skill in skills_data {
+                        skill_chips.push(el("span", #{ "class": "px-3 py-1 bg-indigo-100 text-indigo-700 rounded-full text-sm font-medium" }, [ text(skill) ]));
+                    }
+
+                    let project_cards = [];
+                    for proj in projects_data {
+                        let tech_stack = [];
+                        for t in proj.tech {
+                            tech_stack.push(el("span", #{ "class": "px-2 py-1 bg-gray-100 text-gray-700 rounded text-xs" }, [ text(t) ]));
+                        }
+
+                        project_cards.push(el("div", #{ "class": "bg-white rounded-xl shadow-lg overflow-hidden hover:shadow-xl transition-shadow border border-gray-100" }, [
+                            el("div", #{ "class": "h-32 bg-gradient-to-r from-indigo-500 to-purple-600 flex items-center justify-center" }, [
+                                el("span", #{ "class": "text-white text-3xl font-mono" }, [ text("</>") ])
+                            ]),
+                            el("div", #{ "class": "p-6" }, [
+                                el("div", #{ "class": "flex justify-between items-start mb-2" }, [
+                                    el("h3", #{ "class": "text-xl font-bold text-gray-900" }, [ text(proj.name) ]),
+                                    el("span", #{ "class": "text-sm text-yellow-600 font-medium" }, [ text("★ " + proj.stars.to_string()) ])
+                                ]),
+                                el("p", #{ "class": "text-gray-600 mb-4" }, [ text(proj.desc) ]),
+                                el("div", #{ "class": "flex flex-wrap gap-2" }, tech_stack)
+                            ])
+                        ]));
+                    }
+
+                    return el("div", #{ "class": "p-8 bg-gray-50 min-h-screen font-sans" }, [
                         el("div", #{ "class": "max-w-6xl mx-auto" }, [
                             // Header
                             el("div", #{ "class": "text-center mb-12" }, [
-                                el("h1", #{ "class": "text-4xl font-extrabold text-gray-900 mb-2" }, [ text(data.structured_content.owner) ]),
-                                el("p", #{ "class": "text-lg text-gray-600 max-w-2xl mx-auto" }, [ text(data.structured_content.bio) ]),
+                                el("h1", #{ "class": "text-4xl font-extrabold text-gray-900 mb-2" }, [ text(owner) ]),
+                                el("p", #{ "class": "text-lg text-gray-600 max-w-2xl mx-auto" }, [ text(bio) ]),
                                 // Skills
-                                el("div", #{ "class": "flex flex-wrap justify-center gap-2 mt-4" }, [
-                                    data.structured_content.skills.map(|skill| {
-                                        el("span", #{ "class": "px-3 py-1 bg-indigo-100 text-indigo-700 rounded-full text-sm font-medium" }, [ text(skill) ])
-                                    })
-                                ])
+                                el("div", #{ "class": "flex flex-wrap justify-center gap-2 mt-4" }, skill_chips)
                             ]),
                             // Projects Grid
-                            el("div", #{ "class": "grid grid-cols-1 md:grid-cols-2 gap-6" }, [
-                                data.structured_content.projects.map(|proj| {
-                                    el("div", #{ "class": "bg-white rounded-xl shadow-lg overflow-hidden hover:shadow-xl transition-shadow border border-gray-100" }, [
-                                        el("div", #{ "class": "h-32 bg-gradient-to-r from-indigo-500 to-purple-600 flex items-center justify-center" }, [
-                                            el("span", #{ "class": "text-white text-3xl font-mono" }, [ text("</>") ])
-                                        ]),
-                                        el("div", #{ "class": "p-6" }, [
-                                            el("div", #{ "class": "flex justify-between items-start mb-2" }, [
-                                                el("h3", #{ "class": "text-xl font-bold text-gray-900" }, [ text(proj.name) ]),
-                                                el("span", #{ "class": "text-sm text-yellow-600 font-medium" }, [ text("★ " + proj.stars.to_string()) ])
-                                            ]),
-                                            el("p", #{ "class": "text-gray-600 mb-4" }, [ text(proj.desc) ]),
-                                            el("div", #{ "class": "flex flex-wrap gap-2" }, [
-                                                proj.tech.map(|t| {
-                                                    el("span", #{ "class": "px-2 py-1 bg-gray-100 text-gray-700 rounded text-xs" }, [ text(t) ])
-                                                })
-                                            ])
-                                        ])
-                                    ])
-                                })
-                            ])
+                            el("div", #{ "class": "grid grid-cols-1 md:grid-cols-2 gap-6" }, project_cards)
                         ])
-                    ])
+                    ]);
                 "#;
 
                 Ok(ReadResourceResult {

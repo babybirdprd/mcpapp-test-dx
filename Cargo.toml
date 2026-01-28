@@ -26,3 +26,9 @@ default = ["desktop"]
 web = ["dioxus/web"]
 desktop = ["dioxus/desktop"]
 mobile = ["dioxus/mobile"]
+server-binary = []
+
+[[bin]]
+name = "mcp-server"
+path = "src/server.rs"
+required-features = ["server-binary"]
