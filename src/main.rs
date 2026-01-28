@@ -83,48 +83,95 @@ impl AppState {
             display_mode: Signal::new(DisplayMode::Inline),
         }
     }
+
+    /// Load a tool and update UI state
+    pub async fn load_tool(&mut self, conn_id: String, tool_name: String, resource_uri: String) {
+        println!("State: Loading tool {}...", tool_name);
+        
+        // 1. Set Loading State
+        self.ui_content.set(UiContent::Loading);
+        
+        // 2. Create and set session
+        let session = ui::UiSessionState::new(
+            uuid::Uuid::new_v4().to_string(),
+            conn_id.clone(),
+            resource_uri.clone(),
+        );
+        self.active_session.set(Some(session));
+
+        // 3. Execute Tool Call
+        let manager = self.connection_manager.read().clone();
+        // For demonstration, we'll hardcode some arguments or use defaults
+        // In a real app, this would come from a form or input
+        let args = serde_json::json!({ "location": "San Francisco" });
+        
+        println!("State: Calling tool on manager...");
+        let result = match manager.call_tool(&conn_id, &tool_name, args).await {
+            Ok(res) => res,
+            Err(e) => {
+                println!("State: Tool call failed: {}", e);
+                self.ui_content.set(UiContent::Error(format!("Tool call failed: {}", e)));
+                return;
+            }
+        };
+
+        // 4. Fetch UI Resource
+        println!("State: Reading resource...");
+        match manager.read_ui_resource(&conn_id, &resource_uri).await {
+            Ok(resource_content) => {
+                println!("State: Resource loaded.");
+                let tool_result_json = serde_json::to_string(&result).unwrap_or_default();
+                let content = UiContent::from_resource_content(resource_content, Some(tool_result_json));
+                self.ui_content.set(content);
+            }
+            Err(e) => {
+                println!("State: Resource load failed: {}", e);
+                self.ui_content.set(UiContent::Error(format!("Failed to load UI resource: {}", e)));
+            }
+        }
+    }
 }
 
-/// Main MCP Host component
+/// Tool item component
+#[derive(Props, Clone, PartialEq)]
+struct ToolItemProps {
+    conn_id: String,
+    tool: rmcp::model::Tool,
+    resource_uri: String,
+}
+
 #[component]
-fn McpHost() -> Element {
-    // Initialize application state
-    let app_state = use_context_provider(|| AppState::new());
+fn ToolItem(props: ToolItemProps) -> Element {
+    let app_state = use_context::<AppState>();
+    let tool = props.tool.clone();
+    let conn_id = props.conn_id.clone();
+    let resource_uri = props.resource_uri.clone();
     
-    // Auto-connect to embedded server on mount
-    let mut conn_signal = app_state.selected_connection;
-    let mut err_signal = app_state.error_message;
-    
-    use_effect(move || {
-        let manager = app_state.connection_manager.read().clone();
+    let on_click = move |_| {
+        let conn_id = conn_id.clone();
+        let resource_uri = resource_uri.clone();
+        let tool_name = tool.name.to_string();
+        let mut app_state = app_state.clone();
+        
+        println!("UI: Clicked {}", tool_name);
+        
         spawn(async move {
-            // Try connecting via stdio first
-            match manager.connect_stdio("cargo", vec!["run", "--bin", "mcp-server"].into_iter().map(String::from).collect()).await {
-                Ok(conn_id) => {
-                    conn_signal.set(Some(conn_id));
-                }
-                Err(e) => {
-                    log::warn!("Failed to connect via stdio: {}. Falling back to direct embedded connection.", e);
-                    match manager.connect_embedded().await {
-                        Ok(conn_id) => {
-                            conn_signal.set(Some(conn_id));
-                        }
-                        Err(e) => {
-                            err_signal.set(Some(format!("Failed to connect to embedded server: {}", e)));
-                        }
-                    }
-                }
-            }
+            app_state.load_tool(conn_id, tool_name, resource_uri).await;
         });
-    });
+    };
+    
+    let name = props.tool.name.to_string();
+    let description = props.tool.description.clone();
     
     rsx! {
-        div { class: "flex h-screen bg-gray-100 font-sans",
-            // Sidebar
-            Sidebar {}
+        div {
+            class: "p-3 rounded-lg hover:bg-indigo-50 cursor-pointer transition-all duration-200 border border-transparent hover:border-indigo-100 group",
+            onclick: on_click,
             
-            // Main Content
-            MainContent {}
+            div { class: "font-semibold text-gray-700 group-hover:text-indigo-700", "{name}" }
+            if let Some(desc) = description {
+                div { class: "text-xs text-gray-400 mt-1 truncate", "{desc}" }
+            }
         }
     }
 }
@@ -173,6 +220,7 @@ fn Sidebar() -> Element {
                 } else {
                     for (conn_id, tool, uri) in tools_signal.iter() {
                         ToolItem {
+                            key: "{conn_id}-{tool.name}",
                             conn_id: conn_id.clone(),
                             tool: tool.clone(),
                             resource_uri: uri.clone(),
@@ -189,77 +237,46 @@ fn Sidebar() -> Element {
     }
 }
 
-/// Tool item component
-#[derive(Props, Clone, PartialEq)]
-struct ToolItemProps {
-    conn_id: String,
-    tool: rmcp::model::Tool,
-    resource_uri: String,
-}
-
+/// Main MCP Host component
 #[component]
-fn ToolItem(props: ToolItemProps) -> Element {
-    let app_state = use_context::<AppState>();
-    let tool = props.tool.clone();
-    let conn_id = props.conn_id.clone();
-    let resource_uri = props.resource_uri.clone();
-    let mut ui_content = app_state.ui_content;
-    let mut active_session = app_state.active_session;
+fn McpHost() -> Element {
+    // Initialize application state
+    let app_state = use_context_provider(|| AppState::new());
     
-    let on_click = move |_| {
-        let conn_id = conn_id.clone();
-        let resource_uri = resource_uri.clone();
-        let tool_name = tool.name.to_string();
-        
+    // Auto-connect to embedded server on mount
+    let mut conn_signal = app_state.selected_connection;
+    let mut err_signal = app_state.error_message;
+    
+    use_effect(move || {
+        let manager = app_state.connection_manager.read().clone();
         spawn(async move {
-            // Set loading state
-            ui_content.set(UiContent::Loading);
-            
-            // Create session
-            let session = ui::UiSessionState::new(
-                uuid::Uuid::new_v4().to_string(),
-                conn_id.clone(),
-                resource_uri.clone(),
-            );
-            active_session.set(Some(session));
-            
-            // Call the tool
-            let manager = app_state.connection_manager.read().clone();
-            let args = serde_json::json!({ "location": "San Francisco" });
-            
-            match manager.call_tool(&conn_id, &tool_name, args).await {
-                Ok(result) => {
-                    // Read the UI resource
-                    match manager.read_ui_resource(&conn_id, &resource_uri).await {
-                        Ok(resource_content) => {
-                            let tool_result_json = serde_json::to_string(&result).unwrap_or_default();
-                            let content = UiContent::from_resource_content(resource_content, Some(tool_result_json));
-                            ui_content.set(content);
+            // Try connecting via stdio first
+            match manager.connect_stdio("cargo", vec!["run", "--bin", "mcp-server"].into_iter().map(String::from).collect()).await {
+                Ok(conn_id) => {
+                    conn_signal.set(Some(conn_id));
+                }
+                Err(e) => {
+                    log::warn!("Failed to connect via stdio: {}. Falling back to direct embedded connection.", e);
+                    match manager.connect_embedded().await {
+                        Ok(conn_id) => {
+                            conn_signal.set(Some(conn_id));
                         }
                         Err(e) => {
-                            ui_content.set(UiContent::Error(format!("Failed to load UI: {}", e)));
+                            err_signal.set(Some(format!("Failed to connect to embedded server: {}", e)));
                         }
                     }
                 }
-                Err(e) => {
-                    ui_content.set(UiContent::Error(format!("Tool error: {}", e)));
-                }
             }
         });
-    };
-    
-    let name = props.tool.name.to_string();
-    let description = props.tool.description.clone();
+    });
     
     rsx! {
-        div {
-            class: "p-3 rounded-lg hover:bg-indigo-50 cursor-pointer transition-all duration-200 border border-transparent hover:border-indigo-100 group",
-            onclick: on_click,
+        div { class: "flex h-screen bg-gray-100 font-sans",
+            // Sidebar
+            Sidebar {}
             
-            div { class: "font-semibold text-gray-700 group-hover:text-indigo-700", "{name}" }
-            if let Some(desc) = description {
-                div { class: "text-xs text-gray-400 mt-1 truncate", "{desc}" }
-            }
+            // Main Content
+            MainContent {}
         }
     }
 }
@@ -329,6 +346,12 @@ fn MainContent() -> Element {
     
     let is_overlay = matches!(display_mode.read().clone(), DisplayMode::Fullscreen | DisplayMode::Pip);
     
+    // Create a key for the content renderer based on the session ID or resource URI
+    // This forces a full re-render when switching tools
+    let content_key = active_session.read().as_ref()
+        .map(|s| format!("{}-{}", s.session_id, s.resource_uri))
+        .unwrap_or_else(|| "default".to_string());
+
     rsx! {
         div { class: "flex-1 flex flex-col overflow-hidden relative bg-white",
             // Content Area
@@ -364,6 +387,7 @@ fn MainContent() -> Element {
                     _ => {
                         rsx! {
                             UiContentRenderer {
+                                key: "{content_key}",
                                 content: ui_content,
                                 on_message: Some(EventHandler::new(handle_message)),
                                 host_context: Some(host_context.read().clone()),

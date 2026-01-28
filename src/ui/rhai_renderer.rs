@@ -72,8 +72,8 @@ pub fn create_rhai_engine() -> Engine {
         map
     });
 
-    engine.register_fn("text", |s: &str| -> String {
-        s.to_string()
+    engine.register_fn("text", |v: Dynamic| -> String {
+        v.to_string()
     });
 
     engine.register_fn("v", |arr: Array| -> Array {
@@ -85,25 +85,28 @@ pub fn create_rhai_engine() -> Engine {
 
 #[component]
 pub fn RhaiRenderer(script: String, context: String) -> Element {
-    let node = use_memo(move || {
-        let engine = create_rhai_engine();
-        let mut scope = Scope::new();
+    // We evaluate the Rhai script directly in the render pass.
+    // Since the script and context are passed as props, Dioxus will re-run this function
+    // whenever they change. We avoid use_memo here because Dioxus 0.7+ memoization
+    // primarily tracks signals, and we want to ensure we always render the latest props.
+    // The Rhai engine creation and parsing is fast enough for UI updates.
+    
+    let engine = create_rhai_engine();
+    let mut scope = Scope::new();
 
-        // Parse context JSON and add to scope
-        if let Ok(ctx_val) = serde_json::from_str::<serde_json::Value>(&context) {
-             let dynamic_ctx = rhai::serde::to_dynamic(&ctx_val).unwrap_or(Dynamic::UNIT);
-             scope.push("data", dynamic_ctx);
-        }
+    // Parse context JSON and add to scope
+    if let Ok(ctx_val) = serde_json::from_str::<serde_json::Value>(&context) {
+            let dynamic_ctx = rhai::serde::to_dynamic(&ctx_val).unwrap_or(Dynamic::UNIT);
+            scope.push("data", dynamic_ctx);
+    }
 
-        match engine.eval_with_scope::<Dynamic>(&mut scope, &script) {
-            Ok(result) => UiNode::from_dynamic(result),
-            Err(e) => Err(e.to_string()),
-        }
-    });
+    let result = match engine.eval_with_scope::<Dynamic>(&mut scope, &script) {
+        Ok(result) => UiNode::from_dynamic(result),
+        Err(e) => Err(e.to_string()),
+    };
 
-    let current_node = node.read();
-    match &*current_node {
-        Ok(root) => rsx! { RenderUiNode { node: root.clone() } },
+    match result {
+        Ok(root) => rsx! { RenderUiNode { node: root } },
         Err(e) => rsx! {
             div {
                 class: "text-red-500 p-4 border border-red-500 rounded bg-red-50",

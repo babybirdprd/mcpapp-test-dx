@@ -101,6 +101,46 @@ impl EmbeddedServer {
                     }).as_object().unwrap().clone())),
                 },
                 Tool {
+                    name: "get_system_status".to_string().into(),
+                    title: Some("System Status".to_string().into()),
+                    description: Some("Monitor system performance metrics".to_string().into()),
+                    input_schema: Arc::new(json!({
+                        "type": "object",
+                        "properties": {},
+                    }).as_object().unwrap().clone()),
+                    output_schema: None,
+                    annotations: None,
+                    icons: None,
+                    meta: Some(Meta(json!({
+                        "ui": {
+                            "resourceUri": "ui://system-server/status",
+                            "visibility": ["model", "app"]
+                        }
+                    }).as_object().unwrap().clone())),
+                },
+                Tool {
+                    name: "create_note".to_string().into(),
+                    title: Some("Create Note".to_string().into()),
+                    description: Some("Create a new sticky note".to_string().into()),
+                    input_schema: Arc::new(json!({
+                        "type": "object",
+                        "properties": {
+                            "title": { "type": "string" },
+                            "content": { "type": "string" }
+                        },
+                        "required": ["title", "content"]
+                    }).as_object().unwrap().clone()),
+                    output_schema: None,
+                    annotations: None,
+                    icons: None,
+                    meta: Some(Meta(json!({
+                        "ui": {
+                            "resourceUri": "ui://notes-server/editor",
+                            "visibility": ["model", "app"]
+                        }
+                    }).as_object().unwrap().clone())),
+                },
+                Tool {
                     name: "refresh_weather".to_string().into(),
                     title: Some("Refresh Weather".to_string().into()),
                     description: Some("Refresh weather data (app-only)".to_string().into()),
@@ -192,30 +232,68 @@ impl EmbeddedServer {
                         "projects": [
                             { 
                                 "name": "MCP-Rust", 
-                                "desc": "A Rust implementation of the Model Context Protocol with Apps support.",
+                                "desc": "A Rust implementation of the Model Context Protocol.",
                                 "tech": ["Rust", "Tokio", "JSON-RPC"],
                                 "stars": 128
                             },
                             { 
                                 "name": "Dioxus Dashboard", 
-                                "desc": "A high-performance dashboard using Dioxus and Tailwind CSS.",
+                                "desc": "A high-performance dashboard using Dioxus.",
                                 "tech": ["Rust", "Dioxus", "Tailwind"],
                                 "stars": 256
                             },
                             { 
                                 "name": "Generative UI", 
-                                "desc": "Dynamic UI generation using Rhai scripts and MCP Apps.",
+                                "desc": "Dynamic UI generation using Rhai scripts.",
                                 "tech": ["Rhai", "Rust", "MCP"],
                                 "stars": 64
                             },
                             { 
                                 "name": "AI Agent", 
-                                "desc": "An autonomous agent that builds applications using LLMs.",
+                                "desc": "An autonomous agent that builds applications.",
                                 "tech": ["Rust", "OpenAI", "MCP"],
                                 "stars": 512
                             }
                         ],
                         "skills": ["Rust", "TypeScript", "React", "Dioxus", "MCP", "AI/ML"]
+                    }).as_object().unwrap().clone())),
+                    meta: None,
+                };
+                Ok(res)
+            }
+            "get_system_status" => {
+                let res = CallToolResult {
+                    content: vec![],
+                    is_error: None,
+                    structured_content: Some(serde_json::Value::Object(json!({
+                        "cpu_usage": 45,
+                        "memory_usage": 62,
+                        "disk_usage": 28,
+                        "uptime": "14d 2h 15m",
+                        "active_processes": 142,
+                        "services": [
+                            { "name": "Database", "status": "online", "latency": "12ms" },
+                            { "name": "Web Server", "status": "online", "latency": "4ms" },
+                            { "name": "Auth Service", "status": "online", "latency": "45ms" },
+                            { "name": "Worker Node", "status": "maintenance", "latency": "--" }
+                        ]
+                    }).as_object().unwrap().clone())),
+                    meta: None,
+                };
+                Ok(res)
+            }
+            "create_note" => {
+                let title = arguments.get("title").and_then(|v| v.as_str()).unwrap_or("New Note");
+                let content = arguments.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                
+                let res = CallToolResult {
+                    content: vec![Content::text("Note created")],
+                    is_error: None,
+                    structured_content: Some(serde_json::Value::Object(json!({
+                        "title": title,
+                        "content": content,
+                        "created_at": "Just now",
+                        "id": uuid::Uuid::new_v4().to_string()
                     }).as_object().unwrap().clone())),
                     meta: None,
                 };
@@ -259,11 +337,35 @@ impl EmbeddedServer {
                 }
             }).as_object().unwrap().clone())),
         };
+
+        let system_resource = RawResource {
+            uri: "ui://system-server/status".to_string(),
+            name: "System Status".to_string(),
+            title: None,
+            description: Some("System performance monitor".to_string()),
+            mime_type: Some("text/html;profile=mcp-app".to_string()),
+            size: None,
+            icons: None,
+            meta: Some(Meta(json!({ "ui": { "prefersBorder": true } }).as_object().unwrap().clone())),
+        };
+
+        let notes_resource = RawResource {
+            uri: "ui://notes-server/editor".to_string(),
+            name: "Note Editor".to_string(),
+            title: None,
+            description: Some("Note creation interface".to_string()),
+            mime_type: Some("text/html;profile=mcp-app".to_string()),
+            size: None,
+            icons: None,
+            meta: Some(Meta(json!({ "ui": { "prefersBorder": true } }).as_object().unwrap().clone())),
+        };
         
         Ok(ListResourcesResult {
             resources: vec![
                 Annotated::new(weather_resource, None),
                 Annotated::new(portfolio_resource, None),
+                Annotated::new(system_resource, None),
+                Annotated::new(notes_resource, None),
             ],
             next_cursor: None,
             meta: None,
@@ -342,9 +444,12 @@ impl EmbeddedServer {
                     let project_cards = [];
                     for proj in projects_data {
                         let tech_stack = [];
-                        for t in proj.tech {
+                        let tech_list = if "tech" in proj { proj.tech } else { [] };
+                        for t in tech_list {
                             tech_stack.push(el("span", #{ "class": "px-2 py-1 bg-gray-100 text-gray-700 rounded text-xs" }, [ text(t) ]));
                         }
+                        
+                        let stars = if "stars" in proj { proj.stars } else { 0 };
 
                         project_cards.push(el("div", #{ "class": "bg-white rounded-xl shadow-lg overflow-hidden hover:shadow-xl transition-shadow border border-gray-100" }, [
                             el("div", #{ "class": "h-32 bg-gradient-to-r from-indigo-500 to-purple-600 flex items-center justify-center" }, [
@@ -353,7 +458,7 @@ impl EmbeddedServer {
                             el("div", #{ "class": "p-6" }, [
                                 el("div", #{ "class": "flex justify-between items-start mb-2" }, [
                                     el("h3", #{ "class": "text-xl font-bold text-gray-900" }, [ text(proj.name) ]),
-                                    el("span", #{ "class": "text-sm text-yellow-600 font-medium" }, [ text("★ " + proj.stars.to_string()) ])
+                                    el("span", #{ "class": "text-sm text-yellow-600 font-medium" }, [ text("★ " + stars.to_string()) ])
                                 ]),
                                 el("p", #{ "class": "text-gray-600 mb-4" }, [ text(proj.desc) ]),
                                 el("div", #{ "class": "flex flex-wrap gap-2" }, tech_stack)
@@ -363,24 +468,110 @@ impl EmbeddedServer {
 
                     return el("div", #{ "class": "p-8 bg-gray-50 min-h-screen font-sans" }, [
                         el("div", #{ "class": "max-w-6xl mx-auto" }, [
-                            // Header
                             el("div", #{ "class": "text-center mb-12" }, [
                                 el("h1", #{ "class": "text-4xl font-extrabold text-gray-900 mb-2" }, [ text(owner) ]),
                                 el("p", #{ "class": "text-lg text-gray-600 max-w-2xl mx-auto" }, [ text(bio) ]),
-                                // Skills
                                 el("div", #{ "class": "flex flex-wrap justify-center gap-2 mt-4" }, skill_chips)
                             ]),
-                            // Projects Grid
                             el("div", #{ "class": "grid grid-cols-1 md:grid-cols-2 gap-6" }, project_cards)
                         ])
                     ]);
                 "#;
+                Ok(ReadResourceResult { contents: vec![ResourceContents::text(script, uri)] })
+            }
+            "ui://system-server/status" => {
+                let script = r#"
+                    let content = if data.structured_content != () { data.structured_content } else { #{} };
+                    let cpu = if "cpu_usage" in content { content.cpu_usage } else { 0 };
+                    let mem = if "memory_usage" in content { content.memory_usage } else { 0 };
+                    let disk = if "disk_usage" in content { content.disk_usage } else { 0 };
+                    let uptime = if "uptime" in content { content.uptime } else { "--" };
+                    let services = if "services" in content { content.services } else { [] };
 
-                Ok(ReadResourceResult {
-                    contents: vec![
-                        ResourceContents::text(script, uri)
-                    ],
-                })
+                    let service_rows = [];
+                    for svc in services {
+                        let status_color = if svc.status == "online" { "text-green-600 bg-green-100" } else { "text-red-600 bg-red-100" };
+                        service_rows.push(el("tr", #{ "class": "border-b border-gray-100 last:border-0" }, [
+                            el("td", #{ "class": "py-3 px-4 font-medium text-gray-800" }, [ text(svc.name) ]),
+                            el("td", #{ "class": "py-3 px-4" }, [
+                                el("span", #{ "class": "px-2 py-1 rounded-full text-xs font-semibold " + status_color }, [ text(svc.status.to_string().to_upper_case()) ])
+                            ]),
+                            el("td", #{ "class": "py-3 px-4 text-gray-500 text-sm text-right" }, [ text(svc.latency) ])
+                        ]));
+                    }
+
+                    return el("div", #{ "class": "p-6 bg-gray-50 min-h-full" }, [
+                        el("h2", #{ "class": "text-2xl font-bold text-gray-800 mb-6" }, [ text("System Status") ]),
+                        
+                        // Metrics Grid
+                        el("div", #{ "class": "grid grid-cols-3 gap-4 mb-8" }, [
+                            el("div", #{ "class": "bg-white p-5 rounded-lg shadow-sm border border-gray-100" }, [
+                                el("div", #{ "class": "text-sm text-gray-500 mb-1" }, [ text("CPU Usage") ]),
+                                el("div", #{ "class": "text-3xl font-bold text-indigo-600" }, [ text(cpu.to_string() + "%") ]),
+                                el("div", #{ "class": "w-full bg-gray-200 h-2 rounded-full mt-3 overflow-hidden" }, [
+                                    el("div", #{ "class": "bg-indigo-600 h-full", "style": "width: " + cpu.to_string() + "%" }, [])
+                                ])
+                            ]),
+                            el("div", #{ "class": "bg-white p-5 rounded-lg shadow-sm border border-gray-100" }, [
+                                el("div", #{ "class": "text-sm text-gray-500 mb-1" }, [ text("Memory") ]),
+                                el("div", #{ "class": "text-3xl font-bold text-purple-600" }, [ text(mem.to_string() + "%") ]),
+                                el("div", #{ "class": "w-full bg-gray-200 h-2 rounded-full mt-3 overflow-hidden" }, [
+                                    el("div", #{ "class": "bg-purple-600 h-full", "style": "width: " + mem.to_string() + "%" }, [])
+                                ])
+                            ]),
+                            el("div", #{ "class": "bg-white p-5 rounded-lg shadow-sm border border-gray-100" }, [
+                                el("div", #{ "class": "text-sm text-gray-500 mb-1" }, [ text("Disk") ]),
+                                el("div", #{ "class": "text-3xl font-bold text-blue-600" }, [ text(disk.to_string() + "%") ]),
+                                el("div", #{ "class": "w-full bg-gray-200 h-2 rounded-full mt-3 overflow-hidden" }, [
+                                    el("div", #{ "class": "bg-blue-600 h-full", "style": "width: " + disk.to_string() + "%" }, [])
+                                ])
+                            ])
+                        ]),
+
+                        // Services Table
+                        el("div", #{ "class": "bg-white rounded-lg shadow-sm border border-gray-100 overflow-hidden" }, [
+                            el("div", #{ "class": "px-6 py-4 border-b border-gray-100 flex justify-between items-center" }, [
+                                el("h3", #{ "class": "font-semibold text-gray-800" }, [ text("Active Services") ]),
+                                el("span", #{ "class": "text-xs text-gray-500" }, [ text("Uptime: " + uptime) ])
+                            ]),
+                            el("table", #{ "class": "w-full" }, [
+                                el("thead", #{ "class": "bg-gray-50 text-xs text-gray-500 uppercase" }, [
+                                    el("tr", #{}, [
+                                        el("th", #{ "class": "px-4 py-3 text-left font-medium" }, [ text("Service") ]),
+                                        el("th", #{ "class": "px-4 py-3 text-left font-medium" }, [ text("Status") ]),
+                                        el("th", #{ "class": "px-4 py-3 text-right font-medium" }, [ text("Latency") ])
+                                    ])
+                                ]),
+                                el("tbody", #{}, service_rows)
+                            ])
+                        ])
+                    ]);
+                "#;
+                Ok(ReadResourceResult { contents: vec![ResourceContents::text(script, uri)] })
+            }
+            "ui://notes-server/editor" => {
+                let script = r#"
+                    let content = if data.structured_content != () { data.structured_content } else { #{} };
+                    let title = if "title" in content { content.title } else { "Untitled" };
+                    let body = if "content" in content { content.content } else { "" };
+                    let id = if "id" in content { content.id } else { "" };
+
+                    return el("div", #{ "class": "p-8 max-w-2xl mx-auto font-sans" }, [
+                        el("div", #{ "class": "bg-yellow-50 p-6 rounded-lg shadow-md border border-yellow-200 relative transform rotate-1 transition-transform hover:rotate-0" }, [
+                             el("div", #{ "class": "absolute -top-3 left-1/2 transform -translate-x-1/2 w-32 h-6 bg-yellow-200/50 backdrop-blur-sm rounded-sm shadow-sm" }, []),
+                             
+                             el("h2", #{ "class": "text-2xl font-bold text-gray-800 mb-4 border-b border-yellow-200 pb-2" }, [ text(title) ]),
+                             
+                             el("p", #{ "class": "text-gray-700 whitespace-pre-wrap text-lg leading-relaxed" }, [ text(body) ]),
+                             
+                             el("div", #{ "class": "mt-8 flex justify-between items-center text-xs text-yellow-700" }, [
+                                 el("span", #{}, [ text("ID: " + id.sub_string(0, 8)) ]),
+                                 el("span", #{ "class": "italic" }, [ text("Created just now") ])
+                             ])
+                        ])
+                    ]);
+                "#;
+                Ok(ReadResourceResult { contents: vec![ResourceContents::text(script, uri)] })
             }
             _ => Err(format!("Resource not found: {}", uri)),
         }
