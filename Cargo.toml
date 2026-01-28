@@ -8,6 +8,14 @@ edition = "2021"
 
 [dependencies]
 dioxus = { version = "0.7.1", features = ["router"] }
+rmcp = "0.14.0"
+rhai = { version = "1.19.0", features = ["serde"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+anyhow = "1.0"
+dashmap = "6.0"
 
 [features]
 default = ["desktop"]
