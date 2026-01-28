@@ -1,15 +1,63 @@
-use rmcp::model::*;
+//! Embedded MCP Server
+//!
+//! This module provides an embedded MCP server for demonstration and testing.
+//! It can also be built as a standalone binary for stdio transport testing.
+
+use crate::protocol::*;
+use rmcp::model::{CallToolResult, Content, ListToolsResult, ListResourcesResult, ReadResourceResult, ResourceContents, Tool, Meta, RawResource, Annotated};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
+/// Embedded MCP server implementing the MCP Apps specification
 #[derive(Clone)]
-pub struct EmbeddedServer;
+pub struct EmbeddedServer {
+    server_info: ServerInfo,
+}
+
+#[derive(Clone, Default)]
+struct ServerInfo {
+    name: String,
+    version: String,
+}
 
 impl EmbeddedServer {
+    /// Create a new embedded server
     pub fn new() -> Self {
-        Self
+        Self {
+            server_info: ServerInfo {
+                name: "mcp-apps-embedded-server".to_string(),
+                version: "0.1.0".to_string(),
+            },
+        }
     }
-
+    
+    /// Get server capabilities
+    pub fn get_capabilities(&self) -> Value {
+        json!({
+            "experimental": {
+                UI_EXTENSION_ID: {
+                    "supportedDisplayModes": ["inline", "fullscreen"],
+                    "supportsSandboxing": true
+                }
+            },
+            "tools": {
+                "listChanged": true
+            },
+            "resources": {
+                "listChanged": true
+            }
+        })
+    }
+    
+    /// Get server info
+    pub fn get_server_info(&self) -> Value {
+        json!({
+            "name": self.server_info.name,
+            "version": self.server_info.version
+        })
+    }
+    
+    /// List available tools
     pub async fn list_tools(&self) -> Result<ListToolsResult, String> {
         Ok(ListToolsResult {
             tools: vec![
@@ -20,7 +68,7 @@ impl EmbeddedServer {
                     input_schema: Arc::new(json!({
                         "type": "object",
                         "properties": {
-                            "location": { "type": "string" }
+                            "location": { "type": "string", "description": "City name or location" }
                         },
                         "required": ["location"]
                     }).as_object().unwrap().clone()),
@@ -29,14 +77,15 @@ impl EmbeddedServer {
                     icons: None,
                     meta: Some(Meta(json!({
                         "ui": {
-                            "resourceUri": "ui://weather"
+                            "resourceUri": "ui://weather-server/dashboard",
+                            "visibility": ["model", "app"]
                         }
                     }).as_object().unwrap().clone())),
                 },
                 Tool {
                     name: "get_portfolio".to_string().into(),
-                    title: Some("Portfolio".to_string().into()),
-                    description: Some("Get my professional portfolio".to_string().into()),
+                    title: Some("Portfolio Gallery".to_string().into()),
+                    description: Some("View professional portfolio".to_string().into()),
                     input_schema: Arc::new(json!({
                         "type": "object",
                         "properties": {},
@@ -46,7 +95,26 @@ impl EmbeddedServer {
                     icons: None,
                     meta: Some(Meta(json!({
                         "ui": {
-                            "resourceUri": "ui://portfolio"
+                            "resourceUri": "ui://portfolio-server/gallery",
+                            "visibility": ["model", "app"]
+                        }
+                    }).as_object().unwrap().clone())),
+                },
+                Tool {
+                    name: "refresh_weather".to_string().into(),
+                    title: Some("Refresh Weather".to_string().into()),
+                    description: Some("Refresh weather data (app-only)".to_string().into()),
+                    input_schema: Arc::new(json!({
+                        "type": "object",
+                        "properties": {},
+                    }).as_object().unwrap().clone()),
+                    output_schema: None,
+                    annotations: None,
+                    icons: None,
+                    meta: Some(Meta(json!({
+                        "ui": {
+                            "resourceUri": "ui://weather-server/dashboard",
+                            "visibility": ["app"]  // App-only, hidden from model
                         }
                     }).as_object().unwrap().clone())),
                 },
@@ -55,48 +123,159 @@ impl EmbeddedServer {
             meta: None,
         })
     }
-
-    pub async fn call_tool(&self, name: &str, _arguments: Value) -> Result<CallToolResult, String> {
+    
+    /// Call a tool
+    pub async fn call_tool(&self, name: &str, arguments: Value) -> Result<CallToolResult, String> {
         match name {
             "get_weather" => {
+                let location = arguments
+                    .get("location")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Unknown");
+                
                 let res = CallToolResult {
                     content: vec![
-                        Content::text("Sunny, 25°C")
+                        Content::text(format!("Sunny, 25°C in {}", location))
                     ],
                     is_error: None,
                     structured_content: Some(serde_json::Value::Object(json!({
                         "temp": 25,
                         "conditions": "Sunny",
-                        "location": "San Francisco", // Mock
-                        "humidity": 45
-                    }).as_object().unwrap().clone())),
-                    meta: None,
-                };
-                Ok(res)
-            },
-            "get_portfolio" => {
-                let res = CallToolResult {
-                    content: vec![],
-                    is_error: None,
-                    structured_content: Some(serde_json::Value::Object(json!({
-                        "projects": [
-                            { "name": "MCP-Rust", "desc": "A Rust implementation of the Model Context Protocol." },
-                            { "name": "Dioxus Dashboard", "desc": "A high-performance dashboard using Dioxus and Tailwind." },
-                            { "name": "Generative UI", "desc": "Dynamic UI generation using Rhai scripts." },
-                            { "name": "AI Agent", "desc": "An autonomous agent that builds apps." }
+                        "location": location,
+                        "humidity": 45,
+                        "wind_speed": 12,
+                        "forecast": [
+                            { "day": "Today", "high": 25, "low": 18, "conditions": "Sunny" },
+                            { "day": "Tomorrow", "high": 23, "low": 17, "conditions": "Partly Cloudy" },
+                            { "day": "Wednesday", "high": 22, "low": 16, "conditions": "Cloudy" },
                         ]
                     }).as_object().unwrap().clone())),
                     meta: None,
                 };
                 Ok(res)
-            },
+            }
+            "refresh_weather" => {
+                // Same as get_weather but app-only - duplicate to avoid recursive async
+                let location = arguments
+                    .get("location")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Unknown");
+                
+                let res = CallToolResult {
+                    content: vec![
+                        Content::text(format!("Sunny, 25°C in {}", location))
+                    ],
+                    is_error: None,
+                    structured_content: Some(serde_json::Value::Object(json!({
+                        "temp": 25,
+                        "conditions": "Sunny",
+                        "location": location,
+                        "humidity": 45,
+                        "wind_speed": 12,
+                        "forecast": [
+                            { "day": "Today", "high": 25, "low": 18, "conditions": "Sunny" },
+                            { "day": "Tomorrow", "high": 23, "low": 17, "conditions": "Partly Cloudy" },
+                            { "day": "Wednesday", "high": 22, "low": 16, "conditions": "Cloudy" },
+                        ]
+                    }).as_object().unwrap().clone())),
+                    meta: None,
+                };
+                Ok(res)
+            }
+            "get_portfolio" => {
+                let res = CallToolResult {
+                    content: vec![],
+                    is_error: None,
+                    structured_content: Some(serde_json::Value::Object(json!({
+                        "owner": "Developer Portfolio",
+                        "bio": "Full-stack developer specializing in Rust and web technologies",
+                        "projects": [
+                            { 
+                                "name": "MCP-Rust", 
+                                "desc": "A Rust implementation of the Model Context Protocol with Apps support.",
+                                "tech": ["Rust", "Tokio", "JSON-RPC"],
+                                "stars": 128
+                            },
+                            { 
+                                "name": "Dioxus Dashboard", 
+                                "desc": "A high-performance dashboard using Dioxus and Tailwind CSS.",
+                                "tech": ["Rust", "Dioxus", "Tailwind"],
+                                "stars": 256
+                            },
+                            { 
+                                "name": "Generative UI", 
+                                "desc": "Dynamic UI generation using Rhai scripts and MCP Apps.",
+                                "tech": ["Rhai", "Rust", "MCP"],
+                                "stars": 64
+                            },
+                            { 
+                                "name": "AI Agent", 
+                                "desc": "An autonomous agent that builds applications using LLMs.",
+                                "tech": ["Rust", "OpenAI", "MCP"],
+                                "stars": 512
+                            }
+                        ],
+                        "skills": ["Rust", "TypeScript", "React", "Dioxus", "MCP", "AI/ML"]
+                    }).as_object().unwrap().clone())),
+                    meta: None,
+                };
+                Ok(res)
+            }
             _ => Err(format!("Tool not found: {}", name)),
         }
     }
-
+    
+    /// List available resources
+    pub async fn list_resources(&self) -> Result<ListResourcesResult, String> {
+        let weather_resource = RawResource {
+            uri: "ui://weather-server/dashboard".to_string(),
+            name: "Weather Dashboard".to_string(),
+            title: None,
+            description: Some("Interactive weather visualization dashboard".to_string()),
+            mime_type: Some("text/html;profile=mcp-app".to_string()),
+            size: None,
+            icons: None,
+            meta: Some(Meta(json!({
+                "ui": {
+                    "csp": {
+                        "connectDomains": ["https://api.openweathermap.org"]
+                    },
+                    "prefersBorder": true
+                }
+            }).as_object().unwrap().clone())),
+        };
+        
+        let portfolio_resource = RawResource {
+            uri: "ui://portfolio-server/gallery".to_string(),
+            name: "Portfolio Gallery".to_string(),
+            title: None,
+            description: Some("Professional portfolio gallery view".to_string()),
+            mime_type: Some("text/html;profile=mcp-app".to_string()),
+            size: None,
+            icons: None,
+            meta: Some(Meta(json!({
+                "ui": {
+                    "prefersBorder": true
+                }
+            }).as_object().unwrap().clone())),
+        };
+        
+        Ok(ListResourcesResult {
+            resources: vec![
+                Annotated::new(weather_resource, None),
+                Annotated::new(portfolio_resource, None),
+            ],
+            next_cursor: None,
+            meta: None,
+        })
+    }
+    
+    /// Read a resource
     pub async fn read_resource(&self, uri: &str) -> Result<ReadResourceResult, String> {
         match uri {
-            "ui://weather" => {
+            "ui://weather-server/dashboard" => {
+                // Return a Rhai script for native rendering
+                // In production, this would be HTML with proper MCP Apps lifecycle
                 let script = r#"
                     el("div", #{ "class": "bg-gradient-to-br from-blue-400 to-blue-600 p-6 rounded-xl shadow-2xl text-white max-w-sm mx-auto transform transition-all hover:scale-105" }, [
                         el("div", #{ "class": "flex justify-between items-center mb-4" }, [
@@ -114,7 +293,19 @@ impl EmbeddedServer {
                             ]),
                             el("div", #{ "class": "flex flex-col items-center" }, [
                                 el("span", #{ "class": "text-xs uppercase" }, [ text("Wind") ]),
-                                el("span", #{ "class": "font-bold" }, [ text("12 km/h") ])
+                                el("span", #{ "class": "font-bold" }, [ text(data.structured_content.wind_speed.to_string() + " km/h") ])
+                            ])
+                        ]),
+                        el("div", #{ "class": "mt-6 pt-4 border-t border-white/20" }, [
+                            el("h3", #{ "class": "text-sm font-semibold mb-3" }, [ text("3-Day Forecast") ]),
+                            el("div", #{ "class": "space-y-2" }, [
+                                data.structured_content.forecast.map(|day| {
+                                    el("div", #{ "class": "flex justify-between items-center bg-white/10 rounded px-3 py-2" }, [
+                                        el("span", #{ "class": "text-sm" }, [ text(day.day) ]),
+                                        el("span", #{ "class": "text-sm font-medium" }, [ text(day.high.to_string() + "° / " + day.low.to_string() + "°") ]),
+                                        el("span", #{ "class": "text-xs" }, [ text(day.conditions) ])
+                                    ])
+                                })
                             ])
                         ])
                     ])
@@ -125,32 +316,44 @@ impl EmbeddedServer {
                         ResourceContents::text(script, uri)
                     ],
                 })
-            },
-            "ui://portfolio" => {
+            }
+            "ui://portfolio-server/gallery" => {
                 let script = r#"
                     el("div", #{ "class": "p-8 bg-gray-50 min-h-screen font-sans" }, [
                         el("div", #{ "class": "max-w-6xl mx-auto" }, [
-                            el("div", #{ "class": "text-center mb-16" }, [
-                                el("h1", #{ "class": "text-5xl font-extrabold text-gray-900 mb-4 tracking-tight" }, [ text("Creative Portfolio") ]),
-                                el("p", #{ "class": "text-xl text-gray-500 max-w-2xl mx-auto" }, [ text("Showcasing the intersection of Rust, WebAssembly, and Generative UI.") ])
+                            // Header
+                            el("div", #{ "class": "text-center mb-12" }, [
+                                el("h1", #{ "class": "text-4xl font-extrabold text-gray-900 mb-2" }, [ text(data.structured_content.owner) ]),
+                                el("p", #{ "class": "text-lg text-gray-600 max-w-2xl mx-auto" }, [ text(data.structured_content.bio) ]),
+                                // Skills
+                                el("div", #{ "class": "flex flex-wrap justify-center gap-2 mt-4" }, [
+                                    data.structured_content.skills.map(|skill| {
+                                        el("span", #{ "class": "px-3 py-1 bg-indigo-100 text-indigo-700 rounded-full text-sm font-medium" }, [ text(skill) ])
+                                    })
+                                ])
                             ]),
-                            el("div", #{ "class": "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 gap-10" },
+                            // Projects Grid
+                            el("div", #{ "class": "grid grid-cols-1 md:grid-cols-2 gap-6" }, [
                                 data.structured_content.projects.map(|proj| {
-                                    el("div", #{ "class": "bg-white rounded-2xl shadow-xl overflow-hidden hover:shadow-2xl transition-all duration-300 border border-gray-100 group" }, [
-                                        el("div", #{ "class": "h-48 bg-indigo-600 flex items-center justify-center group-hover:bg-indigo-700 transition-colors" }, [
-                                            el("span", #{ "class": "text-white text-4xl font-mono opacity-50" }, [ text("</>") ])
+                                    el("div", #{ "class": "bg-white rounded-xl shadow-lg overflow-hidden hover:shadow-xl transition-shadow border border-gray-100" }, [
+                                        el("div", #{ "class": "h-32 bg-gradient-to-r from-indigo-500 to-purple-600 flex items-center justify-center" }, [
+                                            el("span", #{ "class": "text-white text-3xl font-mono" }, [ text("</>") ])
                                         ]),
-                                        el("div", #{ "class": "p-8" }, [
-                                            el("h3", #{ "class": "text-2xl font-bold text-gray-900 mb-3" }, [ text(proj.name) ]),
-                                            el("p", #{ "class": "text-gray-600 mb-6 leading-relaxed" }, [ text(proj.desc) ]),
-                                            el("div", #{ "class": "flex items-center text-indigo-600 font-semibold" }, [
-                                                text("View Project"),
-                                                el("span", #{ "class": "ml-2 text-xl" }, [ text("→") ])
+                                        el("div", #{ "class": "p-6" }, [
+                                            el("div", #{ "class": "flex justify-between items-start mb-2" }, [
+                                                el("h3", #{ "class": "text-xl font-bold text-gray-900" }, [ text(proj.name) ]),
+                                                el("span", #{ "class": "text-sm text-yellow-600 font-medium" }, [ text("★ " + proj.stars.to_string()) ])
+                                            ]),
+                                            el("p", #{ "class": "text-gray-600 mb-4" }, [ text(proj.desc) ]),
+                                            el("div", #{ "class": "flex flex-wrap gap-2" }, [
+                                                proj.tech.map(|t| {
+                                                    el("span", #{ "class": "px-2 py-1 bg-gray-100 text-gray-700 rounded text-xs" }, [ text(t) ])
+                                                })
                                             ])
                                         ])
                                     ])
                                 })
-                            )
+                            ])
                         ])
                     ])
                 "#;
@@ -160,8 +363,199 @@ impl EmbeddedServer {
                         ResourceContents::text(script, uri)
                     ],
                 })
-            },
+            }
             _ => Err(format!("Resource not found: {}", uri)),
         }
+    }
+    
+    /// Handle initialize request
+    pub async fn handle_initialize(&self, params: Value) -> Result<Value, String> {
+        // Validate protocol version
+        let client_version = params
+            .get("protocolVersion")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        
+        log::info!("Client initializing with protocol version: {}", client_version);
+        
+        Ok(json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "capabilities": self.get_capabilities(),
+            "serverInfo": self.get_server_info()
+        }))
+    }
+}
+
+impl Default for EmbeddedServer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// Standalone server binary for stdio transport testing
+#[cfg(feature = "server-binary")]
+mod standalone {
+    use super::*;
+    use std::io::{self, BufRead, Write};
+    
+    #[tokio::main]
+    async fn main() {
+        env_logger::init();
+        
+        let server = EmbeddedServer::new();
+        let stdin = io::stdin();
+        let mut stdout = io::stdout();
+        
+        log::info!("MCP Embedded Server started");
+        
+        for line in stdin.lock().lines() {
+            let line = match line {
+                Ok(l) => l,
+                Err(e) => {
+                    log::error!("Error reading stdin: {}", e);
+                    continue;
+                }
+            };
+            
+            let request: Value = match serde_json::from_str(&line) {
+                Ok(v) => v,
+                Err(e) => {
+                    let error = json!({
+                        "jsonrpc": "2.0",
+                        "id": null,
+                        "error": {
+                            "code": -32700,
+                            "message": format!("Parse error: {}", e)
+                        }
+                    });
+                    writeln!(stdout, "{}", error).unwrap();
+                    continue;
+                }
+            };
+            
+            let method = request.get("method").and_then(|v| v.as_str());
+            let id = request.get("id").cloned();
+            let params = request.get("params").cloned();
+            
+            let response = match method {
+                Some("initialize") => {
+                    match server.handle_initialize(params.unwrap_or(json!({}))).await {
+                        Ok(result) => json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": result
+                        }),
+                        Err(e) => json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "error": {
+                                "code": -32603,
+                                "message": e
+                            }
+                        })
+                    }
+                }
+                Some("tools/list") => {
+                    match server.list_tools().await {
+                        Ok(result) => json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": result
+                        }),
+                        Err(e) => json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "error": {
+                                "code": -32603,
+                                "message": e
+                            }
+                        })
+                    }
+                }
+                Some("tools/call") => {
+                    let params = params.unwrap_or(json!({}));
+                    let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                    let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
+                    
+                    match server.call_tool(name, arguments).await {
+                        Ok(result) => json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": result
+                        }),
+                        Err(e) => json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "error": {
+                                "code": -32603,
+                                "message": e
+                            }
+                        })
+                    }
+                }
+                Some("resources/list") => {
+                    match server.list_resources().await {
+                        Ok(result) => json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": result
+                        }),
+                        Err(e) => json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "error": {
+                                "code": -32603,
+                                "message": e
+                            }
+                        })
+                    }
+                }
+                Some("resources/read") => {
+                    let params = params.unwrap_or(json!({}));
+                    let uri = params.get("uri").and_then(|v| v.as_str()).unwrap_or("");
+                    
+                    match server.read_resource(uri).await {
+                        Ok(result) => json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": result
+                        }),
+                        Err(e) => json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "error": {
+                                "code": -32603,
+                                "message": e
+                            }
+                        })
+                    }
+                }
+                Some("notifications/initialized") => {
+                    log::info!("Client initialized notification received");
+                    continue; // No response for notifications
+                }
+                Some(method) => json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "error": {
+                        "code": -32601,
+                        "message": format!("Method not found: {}", method)
+                    }
+                }),
+                None => json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "error": {
+                        "code": -32600,
+                        "message": "Invalid request: missing method"
+                    }
+                })
+            };
+            
+            writeln!(stdout, "{}", response).unwrap();
+            stdout.flush().unwrap();
+        }
+        
+        log::info!("MCP Embedded Server stopped");
     }
 }

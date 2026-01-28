@@ -1,7 +1,13 @@
+//! Rhai UI Renderer
+//!
+//! Custom extension that renders UI using Rhai scripts instead of HTML.
+//! This is a non-standard extension but provides a native feel.
+
 use dioxus::prelude::*;
 use rhai::{Engine, Scope, Map, Array, Dynamic};
 use std::collections::HashMap;
 
+/// UI node types for Rhai rendering
 #[derive(Clone, Debug, PartialEq)]
 pub enum UiNode {
     Element {
@@ -110,8 +116,7 @@ fn RenderUiNode(node: UiNode) -> Element {
         UiNode::Text(t) => rsx! { "{t}" },
         UiNode::Element { tag, props, children } => {
             let class = props.get("class").cloned().unwrap_or_default();
-            // Basic event handlers (optional, for now just static)
-
+            
             match tag.as_str() {
                 "div" => rsx! {
                     div { class: "{class}",
@@ -133,6 +138,11 @@ fn RenderUiNode(node: UiNode) -> Element {
                         {children.into_iter().map(|child| rsx! { RenderUiNode { node: child } })}
                     }
                 },
+                "h3" => rsx! {
+                    h3 { class: "{class}",
+                        {children.into_iter().map(|child| rsx! { RenderUiNode { node: child } })}
+                    }
+                },
                 "p" => rsx! {
                     p { class: "{class}",
                         {children.into_iter().map(|child| rsx! { RenderUiNode { node: child } })}
@@ -140,6 +150,13 @@ fn RenderUiNode(node: UiNode) -> Element {
                 },
                 "button" => rsx! {
                     button { class: "{class}",
+                        {children.into_iter().map(|child| rsx! { RenderUiNode { node: child } })}
+                    }
+                },
+                "a" => rsx! {
+                    a { 
+                        class: "{class}",
+                        href: props.get("href").cloned().unwrap_or_default(),
                         {children.into_iter().map(|child| rsx! { RenderUiNode { node: child } })}
                     }
                 },
@@ -165,6 +182,63 @@ fn RenderUiNode(node: UiNode) -> Element {
                         class: "{class}",
                         value: props.get("value").cloned().unwrap_or_default(),
                         r#type: props.get("type").cloned().unwrap_or("text".to_string()),
+                    }
+                },
+                "label" => rsx! {
+                    label { class: "{class}",
+                        {children.into_iter().map(|child| rsx! { RenderUiNode { node: child } })}
+                    }
+                },
+                "form" => rsx! {
+                    form { class: "{class}",
+                        {children.into_iter().map(|child| rsx! { RenderUiNode { node: child } })}
+                    }
+                },
+                "textarea" => rsx! {
+                    textarea { class: "{class}",
+                        {children.into_iter().map(|child| rsx! { RenderUiNode { node: child } })}
+                    }
+                },
+                "select" => rsx! {
+                    select { class: "{class}",
+                        {children.into_iter().map(|child| rsx! { RenderUiNode { node: child } })}
+                    }
+                },
+                "option" => rsx! {
+                    option { 
+                        class: "{class}",
+                        value: props.get("value").cloned().unwrap_or_default(),
+                        {children.into_iter().map(|child| rsx! { RenderUiNode { node: child } })}
+                    }
+                },
+                "table" => rsx! {
+                    table { class: "{class}",
+                        {children.into_iter().map(|child| rsx! { RenderUiNode { node: child } })}
+                    }
+                },
+                "thead" => rsx! {
+                    thead { class: "{class}",
+                        {children.into_iter().map(|child| rsx! { RenderUiNode { node: child } })}
+                    }
+                },
+                "tbody" => rsx! {
+                    tbody { class: "{class}",
+                        {children.into_iter().map(|child| rsx! { RenderUiNode { node: child } })}
+                    }
+                },
+                "tr" => rsx! {
+                    tr { class: "{class}",
+                        {children.into_iter().map(|child| rsx! { RenderUiNode { node: child } })}
+                    }
+                },
+                "th" => rsx! {
+                    th { class: "{class}",
+                        {children.into_iter().map(|child| rsx! { RenderUiNode { node: child } })}
+                    }
+                },
+                "td" => rsx! {
+                    td { class: "{class}",
+                        {children.into_iter().map(|child| rsx! { RenderUiNode { node: child } })}
                     }
                 },
                 _ => rsx! {
@@ -207,10 +281,10 @@ mod tests {
                             UiNode::Text(t) => assert_eq!(t, "Hello"),
                             _ => panic!("Expected text"),
                         }
-                    },
+                    }
                     _ => panic!("Expected h1"),
                 }
-            },
+            }
             _ => panic!("Expected div"),
         }
     }
